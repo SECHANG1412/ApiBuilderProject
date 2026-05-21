@@ -33,18 +33,6 @@ async def create_item(item: Item):
     # Pydantic 모델 객체를 그대로 반환하면 FastAPI가 자동으로 JSON으로 변환해줍니다.
     # item.model_dump()
     # Pydantic 모델 객체를 일반 파이썬 dict로 변환합니다.
-    #
-    # 예:
-    # Item(name="노트북", price=1000)
-    #
-    # ↓ model_dump()
-    #
-    # {
-    #   "name": "노트북",
-    #   "description": None,
-    #   "price": 1000,
-    #   "tax": None
-    # }
     item_dict = item.model_dump()
 
     # 만약 세금 정보가 있다면 가격에 세금을 더해봅시다.
