@@ -1,280 +1,386 @@
-from email.policy import HTTP
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, EmailStr
-from typing import List, Optional
+from fastapi import FastAPI, HTTPException, Request, status, Depends
+from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field
+
 
 app = FastAPI()
 
 
 
-######################################
-# --- Pydantic 모델 정의 ---
-######################################
 
-# 클라이언트가 회원가입/사용자 생성 요청을 보낼 때 사용하는 입력 모델
-# 비밀번호는 사용자를 만들 때 필요하므로 포함한다.
-class UserIn(BaseModel):
-    username: str
-    password: str    # 입력 시에는 비밀번호가 필요
-    email: EmailStr  # Pydantic의 EmailStr 타입으로 이메일 형식 검증
-    full_name: Optional[str] = None
-
-
-
-# 클라이언트에게 사용자 정보를 응답할 때 사용하는 출력 모델
-# 외부에 비밀번호를 보여주면 안 되므로 password 필드는 제외한다.
-class UserOut(BaseModel):
-    username: str
-    email: EmailStr
-    full_name: Optional[str] = None
-    # 'password' 필드는 여기에 정의되지 않았습니다!
-
-
-
-# 서버 내부에서 아이템 정보를 저장할 때 사용하는 내부 모델
-# owner_id, secret_code처럼 외부에 보여주고 싶지 않은 정보도 포함한다.
-class ItemInternal(BaseModel):
-    name: str
-    price: float
-    owner_id: int     # 내부적으로만 사용할 소유자 ID
-    secret_code: str  # 외부에 노출하고 싶지 않은 비밀 코드
-
-
-
-# 클라이언트에게 아이템 정보를 응답할 때 사용하는 출력 모델
-# owner_id, secret_code는 외부에 노출하지 않기 위해 제외한다.
-class ItemPublic(BaseModel):
-    name: str
-    price: float
-    # 'owner_id' 와 'secret_code' 는 여기에 정의되지 않았습니다!
+# --- 가상 데이터 ---
+items_db = {1: {"name": "Keyboard"}, 2: {"name": "Mouse"}}
 
 
 
 
+#################################
+# --- 커스텀 예외 정의 ---
+#################################
 
-################################
-# --- 가상 데이터베이스 ---
-################################
+# 파이썬 기본 Exception을 상속받아 내가 직접 만든 에러 타입을 정의한다.
+# 예를 들어 "유니콘 관련 에러"라는 특별한 에러를 만들고 싶을 때 사용한다.
 
-# 실제 DB 대신 사용하는 임시 저장소
-# username을 key로 하고, UserIn 모델 객체를 value로 저장한다.
-fake_users_db = {} 
+class UnicornException(Exception):
+    def __init__(self, name: str, message: str = "A unicorn related error occurred"):
+        self.name = name        # 에러가 발생한 유니콘 이름
+        self.message = message  # 에러 메시지
 
-# 실제 DB 대신 사용하는 아이템 임시 데이터
-# 내부 데이터이므로 owner_id, secret_code까지 가지고 있다.
-fake_items_db = {
-    1: ItemInternal(name="Keyboard", price=75.0, owner_id=1, secret_code="abc"),
-    2: ItemInternal(name="Mouse", price=25.5, owner_id=1, secret_code="def"),
-    3: ItemInternal(name="Monitor", price=300.0, owner_id=2, secret_code="ghi"),
+'''
+이 블록은 내가 직접 만든 예외 타입을 정의하는 부분입니다.
+
+파이썬에는 기본적으로 ValueError, TypeError, Exception 같은 예외가 있습니다.
+그런데 서비스마다 직접 표현하고 싶은 에러가 있을 수 있습니다.
+
+예를 들어 이 예제에서는 “유니콘 관련 에러”를 표현하기 위해 UnicornException이라는 예외를 직접 만들었습니다.
+
+여기서 중요한 점은 UnicornException이 Exception을 상속받는다는 것입니다.
+
+class UnicornException(Exception):
+
+이렇게 하면 UnicornException도 파이썬 예외처럼 raise로 발생시킬 수 있습니다.
+
+raise UnicornException(name="sparkle")
+
+self.name과 self.message는 예외가 발생했을 때 핸들러에서 사용할 정보를 저장해두는 값입니다.
+
+쉽게 말하면:
+커스텀 예외는 “내 서비스에서만 쓰는 특별한 에러 종류를 직접 만드는 것”입니다.
+'''
+
+#################################
+# --- 커스텀 예외 핸들러 등록 ---
+#################################
+
+# UnicornException이 발생했을 때 FastAPI가 어떤 응답을 보내야 하는지 정하는 함수
+
+@app.exception_handler(UnicornException)
+async def unicorn_exception_handler(request: Request, exc: UnicornException):
+    # UnicornException이 발생하면 이 핸들러가 실행됨
+    # request: 현재 들어온 요청 정보
+    # exc: 실제로 발생한 UnicornException 객체
+
+    # JSONResponse를 사용해서 직접 JSON 응답을 만든다.
+    return JSONResponse(
+        status_code=418,
+        content={
+            "error_type": "Unicorn Error",
+            "failed_item_name": exc.name,    # 예외 객체 안에 저장해둔 name 값 사용
+            "message": exc.message,          # 예외 객체 안에 저장해둔 message 값 사용
+            "request_url": str(request.url)  # 어떤 URL 요청에서 에러가 발생했는지 추가 정보로 반환
+        },
+    )
+'''
+이 블록은 UnicornException이 발생했을 때 어떤 응답을 보낼지 정하는 부분입니다.
+
+핵심은 이 코드입니다.
+
+@app.exception_handler(UnicornException)
+
+이 뜻은:
+
+앱 전체에서 UnicornException이 발생하면
+unicorn_exception_handler 함수를 실행해라.
+
+입니다.
+
+예를 들어 아래 코드에서 UnicornException이 발생하면,
+
+raise UnicornException(name="sparkle", message="Sparkle caused a rainbow overload!")
+
+FastAPI는 기본 500 에러를 내보내지 않고, 우리가 등록한 핸들러를 실행합니다.
+
+그 결과 응답은 이런 형태가 됩니다.
+{
+  "error_type": "Unicorn Error",
+  "failed_item_name": "sparkle",
+  "message": "Sparkle caused a rainbow overload!",
+  "request_url": "http://127.0.0.1:8000/unicorns/sparkle"
 }
 
+여기서 exc.name은 발생한 예외 객체 안에 들어 있던 name 값입니다.
+exc.message는 예외를 발생시킬 때 넣어준 메시지입니다.
+request.url은 현재 요청 URL입니다.
+
+쉽게 말하면:
+커스텀 예외 핸들러는 “특정 에러가 발생했을 때 응답 모양을 내가 직접 정하는 함수”입니다.
+'''
 
 
+##############################################################
+# --- 기본 RequestValidationError 핸들러 재정의 ---
+##############################################################
+
+# Pydantic 유효성 검사 실패 시 기본 422 응답 대신 커스텀 응답 반환
+
+# FastAPI는 요청 데이터 검증에 실패하면 기본적으로 422 응답을 보낸다.
+# 여기서는 그 기본 응답 모양을 직접 바꾼다.
+
+# 예를 들어 Pydantic 모델에서 value > 10 조건을 걸었는데
+# 클라이언트가 value=5를 보내면 RequestValidationError가 발생한다.
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    
+    # exc.errors()는 검증 실패 상세 내용을 리스트 형태로 반환한다.
+    # 예: 어떤 필드가 문제인지, 왜 실패했는지 등이 들어 있다.
+    error_details = []
+    for error in exc.errors():
+        field = " -> ".join(map(str, error['loc'])) # 오류 발생 필드 위치
+        message = error['msg']                      # 오류 메시지
+        error_details.append(f"Field '{field}': {message}")
+
+    # PlainTextResponse로 단순 텍스트 응답을 보낼 수도 있다.
+    # 지금은 사용하지 않고 JSONResponse를 사용한다.
+    # return PlainTextResponse(
+    #     f"Validation Error(s): {'; '.join(error_details)}",
+    #     status_code=status.HTTP_400_BAD_REQUEST
+    # )
+
+    # 검증 실패 시 기본 422 대신 400 Bad Request로 응답한다.
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,    
+        content={
+            "message": "Invalid input provided.",
+            
+            "details": exc.errors() # Pydantic이 제공하는 원본 검증 오류 상세 정보
+
+            # 위에서 만든 사람이 읽기 쉬운 요약 메시지도 넣을 수 있다.
+            # "simplified_details": error_details
+
+        }
+    )
+'''
+이 블록이 가장 헷갈릴 수 있습니다.
+
+FastAPI는 Pydantic 검증에 실패하면 기본적으로 422 Unprocessable Entity 응답을 보냅니다.
+
+예를 들어 아래 모델이 있죠.
+
+class InputData(BaseModel):
+    value: int = Field(gt=10)
+
+이 뜻은 value가 반드시 10보다 커야 한다는 것입니다.
+
+그런데 클라이언트가 이렇게 요청하면,
+
+{
+  "value": 5
+}
+
+5는 10보다 크지 않으므로 검증 실패입니다.
+이때 FastAPI 내부에서 RequestValidationError가 발생합니다.
+
+원래는 FastAPI가 기본 에러 응답을 보내는데, 이 코드에서는 그 기본 응답 방식을 바꿨습니다.
+
+@app.exception_handler(RequestValidationError)
+
+이 뜻은:
+
+요청 데이터 검증 실패가 발생하면
+FastAPI 기본 응답 대신 validation_exception_handler를 실행해라.
+
+입니다.
 
 
-################################
+그래서 기본 422 대신 이 코드에서는 400 Bad Request로 응답합니다.
+
+status_code=status.HTTP_400_BAD_REQUEST
+
+응답 내용도 직접 정합니다.
+
+{
+  "message": "Invalid input provided.",
+  "details": [...]
+}
+
+여기서 exc.errors()는 Pydantic이 알려주는 검증 실패 상세 정보입니다.
+
+정리하면:
+
+RequestValidationError 핸들러 재정의는 “Pydantic 검증 실패 응답을 FastAPI 기본 모양이 아니라 내가 원하는 모양으로 바꾸는 것”입니다.
+'''
+
+
+#################################
 # --- API 엔드포인트 정의 ---
-################################
+#################################
 
-# 기본 JSON 응답 예제
-@app.get("/ping")
-async def ping():
-    # 딕셔너리를 반환하면 자동으로 JSON 응답이 됩니다.
-    return {"message": "pong"}
+# 1. HTTPException 사용 예제
+@app.get("/items/{item_id}")
+async def read_item(item_id: int):
 
+    # 요청 예:
+    # GET /items/1  -> 정상
+    # GET /items/999 -> items_db에 없으므로 404 에러
 
-
-# 사용자 생성 API
-# 요청은 UserIn으로 받는다. 즉 password까지 받는다.
-# 응답은 UserOut으로 내보낸다. 즉 password는 응답에서 빠진다.
-@app.post("/users", response_model=UserOut, status_code=201)
-async def create_user(user: UserIn):
-
-    print(f"Creating user: {user.username}, Password: {user.password}")
-
-    # 내부 저장소에는 password가 포함된 UserIn 객체를 그대로 저장한다.
-    fake_users_db[user.username] = user
-
-    # 함수는 password가 포함된 user를 반환하지만,
-    # response_model=UserOut 때문에 최종 응답에서는 password가 제거된다.
-    return user
-'''
-이 블록이 이번 코드의 핵심입니다.
-
-이 API는 사용자 생성 요청을 처리합니다.
-함수 매개변수에 user: UserIn이 있으므로, 클라이언트가 보낸 요청 본문은 UserIn 모델 기준으로 검증됩니다.
-
-즉, 요청에는 이런 데이터가 들어올 수 있습니다.
-{
-  "username": "sechang",
-  "password": "1234",
-  "email": "sechang@example.com",
-  "full_name": "Lee Sechang"
-}
-
-여기서 password는 요청을 받을 때 필요합니다.
-
-그런데 API 데코레이터에는 이렇게 되어 있습니다.
-
-response_model=UserOut
-
-이 뜻은:
-
-최종 응답은 UserOut 모델 모양으로 내보내라.
-
-입니다.
-
-함수는 실제로 password가 포함된 user 객체를 반환합니다.
-
-return user
-
-하지만 FastAPI는 최종 응답을 내보내기 전에 UserOut 모델을 기준으로 필터링합니다.
-UserOut에는 password가 없기 때문에 응답에서 password는 자동으로 빠집니다.
-
-최종 응답은 이런 형태가 됩니다.
-
-{
-  "username": "sechang",
-  "email": "sechang@example.com",
-  "full_name": "Lee Sechang"
-}
-
-정리하면 이 API는 비밀번호를 입력으로는 받지만, 응답으로는 숨기는 예제입니다.
-'''
-
-
-# 특정 사용자 조회 API
-# 내부 DB에는 UserIn, 즉 password 포함 객체가 저장되어 있지만
-# 응답 모델이 UserOut이므로 password는 응답에서 제외된다.
-@app.get("/users/{username}", response_model=UserOut)
-async def read_user(username: str):
-
-    if username not in fake_users_db:
-        raise HTTPException(status_code=404, detail="User not found")
+    # item_id가 items_db 안에 없으면 직접 404 에러를 발생시킨다.
+    if item_id not in items_db:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,              # 상태 코드 지정
+            detail=f"Item with ID {item_id} not found.",        # 오류 메시지 지정
+            headers={"X-Error-Source": "Read Item Endpoint"},   # 커스텀 헤더 (선택)
+        )
     
-    # DB에서 가져온 UserIn 객체 (비밀번호 포함)
-    user_in_db = fake_users_db[username]
-
-    return user_in_db
+    # item_id가 존재하면 정상 데이터 반환
+    return items_db[item_id]
 '''
-이 API는 특정 사용자 정보를 조회합니다.
+이 블록은 가장 실무에서 자주 보는 에러 처리 방식입니다.
 
-username은 경로 매개변수입니다.
-예를 들어 /users/sechang으로 요청하면 username에는 "sechang"이 들어갑니다.
+/items/{item_id}로 요청이 들어오면 item_id를 받아서 items_db 안에 해당 데이터가 있는지 확인합니다.
 
-먼저 fake_users_db에 해당 사용자가 있는지 확인합니다.
+예를 들어:
 
-없으면 HTTPException을 발생시켜 404 에러를 반환합니다.
-있으면 fake_users_db에서 사용자 데이터를 꺼냅니다.
+GET /items/1
 
-여기서 꺼낸 데이터는 UserIn 객체입니다.
-즉, 내부적으로는 password를 포함하고 있습니다.
+이 요청은 items_db에 1이 있으므로 정상 응답을 반환합니다.
 
-하지만 이 API에도 response_model=UserOut이 붙어 있습니다.
-
-그래서 최종 응답에서는 password가 제거됩니다.
-
-즉, 이 API는 DB에서 비밀번호가 포함된 사용자 데이터를 가져오더라도, 클라이언트에게는 비밀번호 없이 응답하는 예제입니다.
-'''
-
-
-# 아이템 목록 조회 API
-# 내부 아이템에는 owner_id, secret_code가 있지만
-# 응답은 List[ItemPublic]이므로 name, price만 나간다.
-@app.get("/items/", response_model=List[ItemPublic])
-async def read_items():
-
-    # 실제 DB에서 가져온 ItemInternal 객체들의 리스트라고 가정
-    internal_items_list = list(fake_items_db.values())
-
-    # ItemInternal 객체 리스트를 반환하면, 각 객체가 ItemPublic 스키마에 맞춰 필터링됨
-    return internal_items_list
-'''
-이 API는 아이템 목록을 조회합니다.
-
-fake_items_db.values()는 딕셔너리에 저장된 ItemInternal 객체들을 가져옵니다.
-
-즉, 내부 데이터는 이런 정보들을 가지고 있습니다.
 {
-  "name": "Keyboard",
-  "price": 75.0,
-  "owner_id": 1,
-  "secret_code": "abc"
+  "name": "Keyboard"
 }
 
-그런데 API에는 이렇게 되어 있습니다.
+반대로:
 
-response_model=List[ItemPublic]
+GET /items/999
 
+이 요청은 items_db에 999가 없으므로 아래 코드가 실행됩니다.
 
-이 뜻은:
+raise HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail=f"Item with ID {item_id} not found.",
+    headers={"X-Error-Source": "Read Item Endpoint"},
+)
 
-응답은 ItemPublic 형태의 데이터 여러 개가 담긴 리스트로 내보내라.
+이 코드는 정상 응답을 중단하고, 바로 404 에러 응답을 발생시킵니다.
 
-입니다.
+응답은 대략 이렇게 됩니다.
 
-ItemPublic에는 name, price만 있습니다.
-그래서 각 아이템에서 owner_id, secret_code는 자동으로 빠집니다.
+{
+  "detail": "Item with ID 999 not found."
+}
 
-최종 응답은 이런 형태가 됩니다.
-
-[
-  {
-    "name": "Keyboard",
-    "price": 75.0
-  },
-  {
-    "name": "Mouse",
-    "price": 25.5
-  },
-  {
-    "name": "Monitor",
-    "price": 300.0
-  }
-]
-
-즉, 이 API는 내부 아이템 리스트를 반환하더라도, 외부 공개용 필드만 필터링해서 응답하는 예제입니다.
+즉, HTTPException은 API 함수 안에서 특정 상황이 발생했을 때 직접 에러 응답을 보내는 방법입니다.
 '''
 
 
-# 특정 아이템 조회 API
-# 내부 데이터에는 secret_code가 있지만
-# response_model=ItemPublic 때문에 응답에서는 숨겨진다.
-@app.get("/items/{item_id}", response_model=ItemPublic)
-async def read_single_item(item_id: int):
 
-    if item_id not in fake_items_db:
-        raise HTTPException(status_code=404, detail="Item not found")
+# 2. 커스텀 예외 발생 예제
+@app.get("/unicorns/{name}")
+async def generate_unicorn_error(name: str):
+
+    # 요청 예:
+    # GET /unicorns/abc      -> 정상
+    # GET /unicorns/sparkle  -> UnicornException 발생
+    # GET /unicorns/invalid  -> ValueError 발생
+
+    if name == "sparkle":
+        # 특정 조건에서 커스텀 예외 발생
+        # 직접 만든 UnicornException을 발생시킨다.
+        # 그러면 위에서 등록한 unicorn_exception_handler가 실행된다.
+        raise UnicornException(name=name, message="Sparkle caused a rainbow overload!")
     
-    # DB에서 가져온 ItemInternal 객체 (secret_code 포함)
-    internal_item = fake_items_db[item_id]
-
-    # ItemInternal 객체를 반환해도 response_model=ItemPublic 에 의해 필터링됨
-    return internal_item
+    elif name == "invalid":
+        # ValueError는 따로 핸들러를 등록하지 않았기 때문에
+        # FastAPI의 기본 500 Internal Server Error로 처리된다.
+        raise ValueError("This is an unhandled ValueError")
+    
+    return {"unicorn_name": name, "status": "ok"}
 '''
-이 API는 특정 아이템 하나를 조회합니다.
+이 블록은 커스텀 예외가 실제로 어떻게 발생하는지 보여주는 API입니다.
 
-item_id는 경로 매개변수입니다.
-예를 들어 /items/1로 요청하면 item_id에는 정수 1이 들어갑니다.
+요청에 따라 결과가 달라집니다.
 
-먼저 fake_items_db 안에 해당 ID의 아이템이 있는지 확인합니다.
+GET /unicorns/tom
 
-없으면 404 에러를 반환합니다.
-
-있으면 ItemInternal 객체를 꺼냅니다.
-
-ItemInternal에는 name, price, owner_id, secret_code가 모두 있습니다.
-
-하지만 이 API에는 response_model=ItemPublic이 붙어 있습니다.
-
-그래서 최종 응답에는 name, price만 포함됩니다.
-
-예를 들어 /items/1 응답은 이렇게 나갑니다.
+이 경우 name이 "sparkle"도 아니고 "invalid"도 아니므로 정상 응답입니다.
 
 {
-  "name": "Keyboard",
-  "price": 75.0
+  "unicorn_name": "tom",
+  "status": "ok"
 }
 
-즉, 이 API는 내부적으로는 비밀 정보가 포함된 아이템 객체를 사용하지만, 외부에는 공개 가능한 정보만 응답하는 예제입니다.
+그런데:
+
+GET /unicorns/sparkle
+
+이 요청은 아래 조건에 걸립니다.
+
+if name == "sparkle":
+
+그래서 UnicornException을 발생시킵니다.
+
+raise UnicornException(name=name, message="Sparkle caused a rainbow overload!")
+
+그러면 FastAPI는 위에서 등록한 이 핸들러를 실행합니다.
+
+@app.exception_handler(UnicornException)
+async def unicorn_exception_handler(...)
+
+결과적으로 직접 만든 JSON 에러 응답이 나갑니다.
+
+반면:
+
+GET /unicorns/invalid
+
+이 요청은 ValueError를 발생시킵니다.
+
+raise ValueError("This is an unhandled ValueError")
+
+하지만 이 코드에는 ValueError 전용 예외 핸들러가 없습니다.
+그래서 FastAPI는 이 에러를 처리하지 못한 서버 내부 오류로 보고 일반적으로 500 Internal Server Error를 반환합니다.
+
+즉, 이 블록은 처리할 핸들러가 있는 예외와, 핸들러가 없는 예외의 차이를 보여줍니다.
+'''
+
+
+# 3. 유효성 검사 오류 발생 예제 (RequestValidationError 재정의 테스트용)
+# 요청 body의 value는 반드시 10보다 커야 한다.
+# value가 10 이하이면 Pydantic 검증 실패가 발생한다.
+class InputData(BaseModel):
+    value: int = Field(gt=10)  
+
+
+@app.post("/validate/")
+async def validate_endpoint(data: InputData):
+
+    # 요청 body 예:
+    # {"value": 20} -> 정상
+    # {"value": 5}  -> RequestValidationError 발생
+
+    # 검증을 통과한 경우에만 이 함수 내부가 실행된다.
+    return {"message": "Data is valid!", "received_value": data.value}
+'''
+이 블록은 요청 본문 검증 실패가 발생하는 상황을 보여주는 API입니다.
+
+InputData 모델은 요청 본문에 value라는 숫자값이 들어와야 하고, 그 값은 반드시 10보다 커야 한다고 정의합니다.
+
+정상 요청은 이런 형태입니다.
+
+{
+  "value": 20
+}
+
+이 경우 검증을 통과하므로 validate_endpoint() 함수가 실행되고 정상 응답을 반환합니다.
+
+{
+  "message": "Data is valid!",
+  "received_value": 20
+}
+
+하지만 이런 요청은 실패합니다.
+
+{
+  "value": 5
+}
+
+5는 10보다 크지 않기 때문에 Pydantic 검증에 실패합니다.
+그러면 validate_endpoint() 함수 내부는 실행되지 않습니다.
+
+대신 RequestValidationError가 발생하고, 위에서 재정의한 핸들러가 실행됩니다.
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(...)
+
+그래서 응답은 기본 422가 아니라, 우리가 만든 400 응답 형태로 나갑니다.
 '''
