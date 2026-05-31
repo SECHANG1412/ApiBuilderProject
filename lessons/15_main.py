@@ -248,8 +248,12 @@ async def download_custom(file_name: str):
     # FileResponse로 파일을 응답합니다.
     return FileResponse(
         path=file_path,             # path: 서버 내부의 실제 파일 경로
+
         filename=download_filename, # filename: 브라우저가 다운로드할 때 제안받는 파일명
+                                    # Content-Disposition 헤더 설정 (다운로드 파일명 제안)
+
         media_type=media_type       # media_type: 응답 파일의 종류를 알려주는 값
+                                    # Content-Type 헤더 설정 (파일 종류 명시)
     )
 
 '''
