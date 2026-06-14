@@ -15,7 +15,12 @@ async def common_parameters(
         limit: int = 100            # 가져올 최대 항목 수 (기본값 100)
 ):
     # 딕셔너리 형태로 파라미터들을 묶어서 반환
-    return {"q": q, "skip": skip, "limit": limit}
+    return {
+        "q": q, 
+        "skip": skip, 
+        "limit": limit
+    }
+
 '''
 이 블록은 여러 API에서 공통으로 사용할 쿼리 파라미터 처리 로직을 함수로 분리한 부분입니다.
 
@@ -51,6 +56,7 @@ async def verify_api_key(x_api_key: Optional[str] = None):
     
     # 유효하면 키 값을 반환 (또는 그냥 None을 반환해도 됨)
     return x_api_key
+
 '''
 이 블록은 요청으로 들어온 API 키가 올바른지 확인하는 의존성 함수입니다.
 
@@ -64,9 +70,11 @@ async def verify_api_key(x_api_key: Optional[str] = None):
 /secure-data/?x_api_key=wrongkey
 
 실패하면 FastAPI는 대략 이런 응답을 반환합니다.
+
 {
   "detail": "Invalid API Key"
 }
+
 중요한 점은, 이 의존성 함수에서 에러가 발생하면 실제 API 함수는 실행되지 않는다는 것입니다.
 
 즉, 이 블록은 보호된 API에 들어오기 전에 먼저 인증 검사를 수행하는 문지기 역할을 합니다.
@@ -76,8 +84,7 @@ async def verify_api_key(x_api_key: Optional[str] = None):
 
 # 3. 하위 의존성 예시: verify_api_key 의존성을 사용하는 또 다른 의존성
 async def verify_admin_access(
-        # verify_api_key의 반환값이 api_key 변수에 주입됩니다.
-        api_key: str = Depends(verify_api_key)
+        api_key: str = Depends(verify_api_key)  # verify_api_key의 반환값이 api_key 변수에 주입됩니다.
 ):
     
     # 이 예제에서는 키가 유효하기만 하면 관리자 접근을 허용한다고 가정합니다.
@@ -85,7 +92,10 @@ async def verify_admin_access(
     print(f"관리자 접근 확인됨 (API 키: {api_key})")
 
     # 관리자임을 나타내는 정보를 반환할 수 있습니다.
-    return {"is_admin": True}
+    return {
+        "is_admin": True
+    }
+
 '''
 이 블록은 다른 의존성 함수 안에서 또 다른 의존성을 사용하는 예제입니다.
 
@@ -128,8 +138,15 @@ async def read_items(
     commons: dict = Depends(common_parameters)
 ):
     print(f"요청 파라미터: {commons}")
+
     items_data = [{"item_name": "Item 1"}, {"item_name": "Item 2"}]
-    return {"message": "Reading items", "params": commons, "data": items_data}
+
+    return {
+        "message": "Reading items", 
+        "params": commons, 
+        "data": items_data
+    }
+
 '''
 이 블록은 /items/ 경로로 GET 요청이 들어왔을 때 아이템 목록을 반환하는 API입니다.
 
